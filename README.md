@@ -1,6 +1,6 @@
 # DPI_Censorship_Engine
 
-# Author: Christian Seely
+### Author: Christian Seely
 
 Note: You can also find this exact same README in my project repo: (https://github.com/CS-Labs/DPI_Censorship_Engine) which has the videos referenced below embedded in for easier viewing. 
 
