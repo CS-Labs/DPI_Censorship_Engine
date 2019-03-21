@@ -27,7 +27,7 @@ Setup system wide proxy:
 * Click Network proxy
 * Enter the address 127.0.0.1 and port 8080 for the HTTP/HTTPS proxies. 
 
-![Setup-system-wide-proxy](https://github.com/CS-Labs/Web-rary/blob/master/gifs/system_proxy_setup.gif
+![Setup-system-wide-proxy](https://github.com/CS-Labs/DPI_Censorship_Engine/blob/master/gifs/system_proxy_setup.gif
 
 Add the fake CA as a trusted one:
 * Open Firefox preferences/options
@@ -37,7 +37,7 @@ Add the fake CA as a trusted one:
 * Click on import
 * Navigate to the trustedCert.pem file (in the auth folder) and import it.
 
-![fake-ca-setup](https://github.com/CS-Labs/Web-rary/blob/master/gifs/cert_setup.gif
+![fake-ca-setup](https://github.com/CS-Labs/DPI_Censorship_Engine/blob/master/gifs/cert_setup.gif
 
 Bugs:
 * Not all sites work at the moment, Firefox does not always like what I'm sending it. 
@@ -64,4 +64,4 @@ Once the script is run try navigating to one of the two sites listed above. When
 
 Since setting things up can be slightly a hassle I included a short video demoing the current functionality:
 
-![demo](https://github.com/CS-Labs/Web-rary/blob/master/gifs/current_demo.gif
+![demo](https://github.com/CS-Labs/DPI_Censorship_Engine/blob/master/gifs/current_demo.gif
