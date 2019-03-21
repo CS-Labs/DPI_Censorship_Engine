@@ -22,13 +22,21 @@ class CensorshipEngine(object):
             :param bBody: Decrypted/decoded content body of an http response. 
         """
         # Must:
-        # TODO: The engine should take a censorship configuration file on startup.
-        # TODO: Add ability to do body modification in-line (blocking, same thread) 
-        # TODO: Recording off-line (different thread, non-blocking). This will use techniques in the papers read.
-        # Stretch: 
-        # TODO: Word association censorship
-        # TODO: Image recognition censorship 
-        # TODO: Further regex optimizations discussed in some of the more advanced papers. 
+        # Design the censorship engine:
+        #   Add support for the following censorship events:
+        #       Regex matching of specified content in web packet bodies.
+        #       Pages matching configured censored categorical domains. This will be the most difficult thing I have left to 
+        #       implement and as far as I could find this has not been done in real time for censorship before. I plan on 
+        #       trying an array of machine learning based solutions I was able to find through my research. I plan to start 
+        #       with the simplest which is removing the html boilerplate and then doing regular text categorization. If 
+        #       there is time I would like to look into using the unique features web pages have (such as links) to aid 
+        #       in my categorization.
+        #   Add support for the following censorship actions:
+        #       Log information about offenders such as their ip address and what censorship parameters they violated. 
+        #       Killing client connections with the web server they are trying to talk to and block them in the future from the site.
+        #       Completely block clients from connecting to external web servers. 
+        #       Modify the content bodies of server responses based on censorship parameters. This will be the only action perform in-line (blocking).
+
         
         # Just print out the content body for now to show the ssl-interception is working. 
         if bBody:
