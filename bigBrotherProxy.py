@@ -4,44 +4,39 @@ import gzip
 import zlib
 import subprocess
 import argparse
+import json
+import re
+import math
+import logging
 from contextlib import contextmanager
-from abc import ABC
+from abc import ABC, abstractmethod
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from socketserver import ThreadingMixIn
 from http.client import HTTPResponse
 from ssl import wrap_socket
 from socket import socket
+from google.cloud import language
 
 class CensorshipEngine(object):
     """
         Censorship engine providing both in line (blocking) and off-line Deep packet inspection (DPI).
     """
+    def __init__(self, aRules):
+        self.aRules = aRules
+
     def process(self, bBody):
         """
             Entry point for tasking the engine. 
             :param bBody: Decrypted/decoded content body of an http response. 
         """
-        # Must:
-        # Design the censorship engine:
-        #   Add support for the following censorship events:
-        #       Regex matching of specified content in web packet bodies.
-        #       Pages matching configured censored categorical domains. This will be the most difficult thing I have left to 
-        #       implement and as far as I could find this has not been done in real time for censorship before. I plan on 
-        #       trying an array of machine learning based solutions I was able to find through my research. I plan to start 
-        #       with the simplest which is removing the html boilerplate and then doing regular text categorization. If 
-        #       there is time I would like to look into using the unique features web pages have (such as links) to aid 
-        #       in my categorization.
-        #   Add support for the following censorship actions:
-        #       Log information about offenders such as their ip address and what censorship parameters they violated. 
-        #       Killing client connections with the web server they are trying to talk to and block them in the future from the site.
-        #       Completely block clients from connecting to external web servers. 
-        #       Modify the content bodies of server responses based on censorship parameters. This will be the only action perform in-line (blocking).
-
-        
         # Just print out the content body for now to show the ssl-interception is working. 
         if bBody:
             print(bBody)
-
+        for oRule in self.aRules:
+            if oRule.matches(bBody):
+                sResult = oRule.performActions()
+                if sResult:
+                    return sResult
 class CA(object):
     """
         Representation of our fake Certificate Authority
@@ -61,8 +56,140 @@ class CA(object):
             :param sServerCrs: Path to the generated server certificate signing request.
             :return: Command to generate the CA signed certificate.
         """
-        # TODO: Abstract openssl logic. 
         return "openssl x509 -req -in {0} -CA {1} -CAkey {2} -CAcreateserial".format(sServerCrs, self.sCrtPath, self.sKeyPath) 
+
+class ACTION_TYPES(object):
+    LOG = 'Log'
+    BLOCK = 'Block'
+    EDIT = 'Edit'
+
+class CONDITION_TYPES(object):
+    REGEX = 'Regex'
+    CLASSIFY = 'Classify'
+
+class Action(ABC):
+    @abstractmethod
+    def perform(**kwargs):
+        pass
+
+class LogAction(Action):
+
+    def __init__(self, oSettings):
+        sOutPutDir = oSettings.get('OutputDir')
+        if not os.path.exists(sOutPutDir):
+            os.makedirs(sOutPutDir)
+        sLogFile = os.path.join(sOutPutDir, oSettings.get('File'))
+        logging.basicConfig(filename='app.log', filemode='w', format='%(asctime)s - %(message)s', datefmt='%d-%b-%y %H:%M:%S')
+
+    def perform(self, sMessage):
+        logging.info(sMessage)
+
+class BlockAction(Action):
+
+    def __init__(self, oSettings):
+        self.sBlockPage = """
+            <!DOCTYPE html>
+            <html>
+            <body>
+            <h1>{0}</h1>
+            </body>
+            </html>
+        """.format(oSettings.get('BlockMessage'))
+
+    def perform(self):
+        return self.sBlockPage
+
+class EditAction(Action):
+
+    def __init__(self, oSettings):
+        self.oRegex = re.compile(oSettings.get('Start'))
+        self.sReplacement = oSettings.get('End')
+
+    def perform(self, sBody):
+        return self.oRegex.sub(self.sReplacement, sBody)
+
+class Condition(ABC):
+    def matches(**kwargs):
+        pass
+
+class RegexCondition(Condition):
+
+    def __init__(self, oSettings):
+        self.oRegex = re.compile(oSettings.get('Pattern'))
+
+    def matches(self, bBody):
+        return self.oRegex.matches(bBody)
+
+class ClassifyCondition(Condition):
+
+    def __init__(self, oSettings):
+        # Only import if the user is using this feature.
+        from google.cloud import language
+        self.aCategories = oSettings.get('Categories')
+
+    def matches(self, bBody):
+        # For performance only check the between the title tags.
+        # If there is no title return.
+        try:
+            sTitle = bBody.split('<title>')[1].split('</title>')[0]
+        except Exception as e:
+            return
+        # Ensure there is at least 20 words. (Required for classifcation).
+        aTmp = sTitle.split()
+        iNWords = len(aTmp)
+        if iNWords < 1:
+            return
+        elif iNWords < 20:
+            sTitle = ' '.join(sWord for sWord in aTmp * (math.ceil((20 - iNWords) / iNWords) + 1))
+
+        # Perform the classification.
+        oDocument = language.types.Document(content=sTitle,type=language.enums.Document.Type.PLAIN_TEXT)
+        oResponse = language_client.classify_text(oDocument)
+        aFoundCategories = oResponse.categories
+        return any(sCategory in aFoundCategories for sCategory in self.aCategories)
+
+class Rule(object):
+    def __init__(self, aConditions, aActions):
+        self.aConditions = aConditions
+        self.aActions = aActions
+
+    def matches(self):
+        return any(oCondition.matches() for oCondition in self.aConditions)
+
+    def performActions(self):
+        for oAction in aActions:
+            sResult = oAction.perform()
+            # For actions that modify the content body.
+            if sResult:
+                return sResult
+
+class Parser(object):
+    @staticmethod
+    def parseCensorshipConf(sPath):
+        # try:
+        with open('censorConf.json', 'rb') as oJson:
+            oJsonCont = json.loads(oJson.read())
+        return list(map(Parser.ruleFactory, oJsonCont.get('Settings')))
+        # except Exception as e:
+        #     raise Exception("Unable to parse config file. {0}".format(str(e)))
+
+    @staticmethod
+    def ruleFactory(oJsonRule):
+        aConditions = []
+        aActions = []
+        for sCond, oSettings in oJsonRule.get('Conditions').items():
+            if sCond == CONDITION_TYPES.REGEX:
+                aConditions.append(RegexCondition(oSettings))
+            if sCond == CONDITION_TYPES.CLASSIFY:
+                aConditions.append(ClassifyCondition(oSettings))
+        for sAction, oSettings in oJsonRule.get('Actions').items():
+            if sAction == ACTION_TYPES.LOG:
+                aActions.append(LogAction(oSettings))
+            if sAction == ACTION_TYPES.BLOCK:
+                aActions.append(BlockAction(oSettings))
+            if sAction == ACTION_TYPES.EDIT:
+                aActions.append(EditAction(oSettings))
+        return Rule(aConditions, aActions)
 
 
 class AuthenticationManager(object):
@@ -120,7 +247,6 @@ class AuthenticationManager(object):
         return sCert
 
 
-# TODO: Support more. 
 class CONTENT_ENCODINGS(object):
     GZIP = 'gzip' # The content bodies containing html are usually compressed with gzip.
 
@@ -131,6 +257,7 @@ class Relay(ABC):
     """
         Base class for a relay communication. 
     """
+    @abstractmethod
     def relay(self, bData):
         pass
 
@@ -343,9 +470,14 @@ class ProxyMessageHandler(BaseHTTPRequestHandler):
         self.oClientServerRelay.disconnect()
 
         # Pass the decoded content body of the response to our censorship engine. 
-        oCensorshipEngine.process(oHttpResponseWrapper.getDecodedBody())
+        sResult = oCensorshipEngine.process(oHttpResponseWrapper.getDecodedBody())
+        # The engine might end up modifying the content of the body. If that's the case 
+        # we need to reencode it before forwarding it to the client.
         # Forward the reponse to the client. 
-        self.request.sendall(bytes(oHttpResponseWrapper))
+        if oResult:
+            self.request.sendall(bytes(zlib.compress(oResult, 16+zlib.MAX_WBITS)))
+        else:
+            self.request.sendall(bytes(oHttpResponseWrapper))
 
 
     # Forward all other messages to the message processor, note these are parent methods we
