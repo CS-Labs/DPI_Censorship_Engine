@@ -17,6 +17,8 @@ from ssl import wrap_socket
 from socket import socket
 from google.cloud import language
 
+logging.basicConfig(filename='censor.log', filemode='w', format='%(asctime)s - %(message)s', datefmt='%d-%b-%y %H:%M:%S', level=logging.INFO)
+
 class CensorshipEngine(object):
     """
         Censorship engine providing both in line (blocking) and off-line Deep packet inspection (DPI).
@@ -24,19 +26,18 @@ class CensorshipEngine(object):
     def __init__(self, aRules):
         self.aRules = aRules
 
-    def process(self, bBody):
+    def process(self, sClient, bBody):
         """
             Entry point for tasking the engine. 
             :param bBody: Decrypted/decoded content body of an http response. 
         """
         # Just print out the content body for now to show the ssl-interception is working. 
         if bBody:
-            print(bBody)
-        for oRule in self.aRules:
-            if oRule.matches(bBody):
-                sResult = oRule.performActions()
-                if sResult:
-                    return sResult
+            for oRule in self.aRules:
+                if oRule.matches(bBody):
+                    sResult = oRule.performActions({'sClient' : sClient, 'bBody': bBody})
+                    if sResult:
+                        return sResult
 class CA(object):
     """
         Representation of our fake Certificate Authority
@@ -74,19 +75,16 @@ class Action(ABC):
 
 class LogAction(Action):
 
-    def __init__(self, oSettings):
-        sOutPutDir = oSettings.get('OutputDir')
-        if not os.path.exists(sOutPutDir):
-            os.makedirs(sOutPutDir)
-        sLogFile = os.path.join(sOutPutDir, oSettings.get('File'))
-        logging.basicConfig(filename='app.log', filemode='w', format='%(asctime)s - %(message)s', datefmt='%d-%b-%y %H:%M:%S')
+    def __init__(self, oSettings, aRequiredArgs):
+        self.aRequiredArgs = aRequiredArgs
 
-    def perform(self, sMessage):
-        logging.info(sMessage)
+    def perform(self, sClient):
+        logging.info("Client: {0} as violated censorship rules.".format(str(sClient)))
 
 class BlockAction(Action):
 
-    def __init__(self, oSettings):
+    def __init__(self, oSettings, aRequiredArgs):
+        self.aRequiredArgs = aRequiredArgs
         self.sBlockPage = """
             <!DOCTYPE html>
             <html>
@@ -101,12 +99,13 @@ class BlockAction(Action):
 
 class EditAction(Action):
 
-    def __init__(self, oSettings):
+    def __init__(self, oSettings, aRequiredArgs):
+        self.aRequiredArgs = aRequiredArgs
         self.oRegex = re.compile(oSettings.get('Start'))
         self.sReplacement = oSettings.get('End')
 
-    def perform(self, sBody):
-        return self.oRegex.sub(self.sReplacement, sBody)
+    def perform(self, bBody):
+        return self.oRegex.sub(self.sReplacement, bBody.decode('utf-8'))
 
 class Condition(ABC):
     def matches(**kwargs):
@@ -118,22 +117,27 @@ class RegexCondition(Condition):
         self.oRegex = re.compile(oSettings.get('Pattern'))
 
     def matches(self, bBody):
-        return self.oRegex.matches(bBody)
+        return self.oRegex.search(bBody.decode('utf-8'))
 
 class ClassifyCondition(Condition):
 
     def __init__(self, oSettings):
         # Only import if the user is using this feature.
+        assert('GOOGLE_APPLICATION_CREDENTIALS' in os.environ)
         from google.cloud import language
+        self.oLanguageClient = language.LanguageServiceClient()
         self.aCategories = oSettings.get('Categories')
 
     def matches(self, bBody):
         # For performance only check the between the title tags.
         # If there is no title return.
         try:
-            sTitle = bBody.split('<title>')[1].split('</title>')[0]
+            sTitle = bBody.decode('utf-8').split('<title>')[1].split('</title>')[0]
         except Exception as e:
-            return
+            try:
+                sTitle = bBody.decode('utf-8').split('<TITLE>')[1].split('</TITLE>')[0]
+            except Exception as e:
+                return
         # Ensure there is at least 20 words. (Required for classifcation).
         aTmp = sTitle.split()
         iNWords = len(aTmp)
@@ -141,11 +145,10 @@ class ClassifyCondition(Condition):
             return
         elif iNWords < 20:
             sTitle = ' '.join(sWord for sWord in aTmp * (math.ceil((20 - iNWords) / iNWords) + 1))
-
         # Perform the classification.
         oDocument = language.types.Document(content=sTitle,type=language.enums.Document.Type.PLAIN_TEXT)
-        oResponse = language_client.classify_text(oDocument)
-        aFoundCategories = oResponse.categories
+        oResponse = self.oLanguageClient.classify_text(oDocument)
+        aFoundCategories = [oCategory.name for oCategory in oResponse.categories]
         return any(sCategory in aFoundCategories for sCategory in self.aCategories)
 
 class Rule(object):
@@ -153,12 +156,12 @@ class Rule(object):
         self.aConditions = aConditions
         self.aActions = aActions
 
-    def matches(self):
-        return any(oCondition.matches() for oCondition in self.aConditions)
+    def matches(self, bBody):
+        return any(oCondition.matches(bBody) for oCondition in self.aConditions)
 
-    def performActions(self):
-        for oAction in aActions:
-            sResult = oAction.perform()
+    def performActions(self, oArgPool):
+        for oAction in self.aActions:
+            sResult = oAction.perform(*(oArgPool.get(sArg) for sArg in oAction.aRequiredArgs))
             # For actions that modify the content body.
             if sResult:
                 return sResult
@@ -184,11 +187,11 @@ class Parser(object):
                 aConditions.append(ClassifyCondition(oSettings))
         for sAction, oSettings in oJsonRule.get('Actions').items():
             if sAction == ACTION_TYPES.LOG:
-                aActions.append(LogAction(oSettings))
+                aActions.append(LogAction(oSettings, ['sClient']))
             if sAction == ACTION_TYPES.BLOCK:
-                aActions.append(BlockAction(oSettings))
+                aActions.append(BlockAction(oSettings, []))
             if sAction == ACTION_TYPES.EDIT:
-                aActions.append(EditAction(oSettings))
+                aActions.append(EditAction(oSettings, ['bBody']))
         return Rule(aConditions, aActions)
 
 
@@ -404,10 +407,10 @@ class ProxyMessageHandler(BaseHTTPRequestHandler):
         """
             Handle proxy errors. 
         """
-        try:
-            yield # Run the body of the context.
-        except Exception as e:  # TODO Add custom exceptions.
-            self.send_error(418, str(e)) # :)
+       # try:
+        yield # Run the body of the context.
+       # except Exception as e:  # TODO Add custom exceptions.
+       #     self.send_error(418, str(e)) # :)
             
 
     def establishServerRelayConnection(self):
@@ -464,18 +467,17 @@ class ProxyMessageHandler(BaseHTTPRequestHandler):
         oHttpReqWrapper = HTTPRequestWrapper(self.requestline, self.headers, sBody)
         # Relay the request to the server. 
         self.oClientServerRelay.relay(oHttpReqWrapper.encode())
-
         # Parse the http response. 
         oHttpResponseWrapper = self.oClientServerRelay.getServerResponse(self.request_version)
         self.oClientServerRelay.disconnect()
 
         # Pass the decoded content body of the response to our censorship engine. 
-        sResult = oCensorshipEngine.process(oHttpResponseWrapper.getDecodedBody())
+        sResult = oCensorshipEngine.process(self.client_address, oHttpResponseWrapper.getDecodedBody())
         # The engine might end up modifying the content of the body. If that's the case 
         # we need to reencode it before forwarding it to the client.
         # Forward the reponse to the client. 
-        if oResult:
-            self.request.sendall(bytes(zlib.compress(oResult, 16+zlib.MAX_WBITS)))
+        if sResult:
+            self.request.sendall(bytes(sResult.encode('utf-8')))
         else:
             self.request.sendall(bytes(oHttpResponseWrapper))
 
