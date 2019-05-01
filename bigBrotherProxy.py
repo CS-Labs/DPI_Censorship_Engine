@@ -500,17 +500,22 @@ class ProxyServer(ThreadingMixIn, HTTPServer):
 
 
 if __name__ == '__main__':
-    # TODO: Figure out how to cleanly make the censorship engine and auth manager available to the ProxyMessageHandler.
-    oCensorshipEngine = CensorshipEngine()
-    oProxyServer = ProxyServer()
     # TODO: Add rest of command line arguments. 
     oParser = argparse.ArgumentParser(description="Proxy server with build in censorship engine.")
     oParser.add_argument('-a', '--authstore', help='Path to the auth store (the auth folder)', required=True)
+    oParser.add_argument('-c', '--censorconf', help='Path to the censorship config file', required=True)
     oArgs = vars(oParser.parse_args())
-    if not os.path.exists(oArgs.get('authstore')):
-        print("{0} does not exist.".format(oArgs.get('authstore')))
-        sys.exit(-1)
     sAuthStore = oArgs.get('authstore')
+    sCensorConfPath = oArgs.get('authstore')
+    if not os.path.exists(sAuthStore):
+        print("{0} does not exist.".format(sAuthStore))
+        sys.exit(-1)
+    if not os.path.exists(sCensorConfPath):
+        print("{0} does not exist.".format(sCensorConfPath))
+        sys.exit(-1)
+    # TODO: Figure out how to cleanly make the censorship engine and auth manager available to the ProxyMessageHandler.
+    oCensorshipEngine = CensorshipEngine(Parser.parseCensorshipConf(sCensorConfPath))
+    oProxyServer = ProxyServer()
     oCA = CA(sKeyPath=os.path.join(sAuthStore, 'fakeCA.key'), sCrtPath=os.path.join(sAuthStore,'fakeCA.crt'))
     oAuthManager = AuthenticationManager(oCA, sAuthStore, os.path.join(sAuthStore, 'serv.key'))
     try:
