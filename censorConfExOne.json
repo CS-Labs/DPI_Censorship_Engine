@@ -1,0 +1,27 @@
+{
+  "Settings": [
+    {
+      "Conditions": {
+          "Regex": {
+            "Pattern": "creative"
+          }
+      },
+      "Actions":{
+          "Log": {}
+      }
+    },
+    {
+      "Conditions": {
+          "Regex": {
+            "Pattern": "Harvard University"
+          }
+      },
+      "Actions":{
+          "Edit": {
+            "Start": "Harvard University",
+            "End": "University of New Mexico"
+          }
+      }
+    }
+  ]
+}

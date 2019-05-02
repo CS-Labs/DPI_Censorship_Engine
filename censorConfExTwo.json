@@ -1,0 +1,16 @@
+{
+  "Settings": [
+    {
+      "Conditions": {
+          "Classify": {
+            "Categories": ["/News/Politics", "/Law & Government/Government"]
+          }
+      },
+      "Actions":{
+          "Block": {
+            "BlockMessage": "You have been blocked from this site. :)"
+          }
+      }
+    }
+  ]
+}
