@@ -97,10 +97,16 @@ Scenario One:
 - Condition: Regex match on "creative"
 - Action: Log the offense.
 
+![example-one](https://github.com/CS-Labs/DPI_Censorship_Engine/blob/master/gifs/ex1.gif)
+
 Scenario Two:
 - Condition: Regex match on "Harvard University"
 - Action: Replace "Harvard University" with "University of New Mexico"
 
+![example-two](https://github.com/CS-Labs/DPI_Censorship_Engine/blob/master/gifs/ex2.gif)
+
 Scenario Three:
 - Condition: Classfier matches on "/News/Politics", "/Law & Government/Government"
 - Action: Block the page.
+
+![example-three](https://github.com/CS-Labs/DPI_Censorship_Engine/blob/master/gifs/ex3.gif)
