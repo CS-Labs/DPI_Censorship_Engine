@@ -1,3 +1,8 @@
+############################
+#                          #
+# Author: Christian Seely  #
+#                          #
+############################
 import os
 import time
 import gzip
@@ -17,25 +22,33 @@ from ssl import wrap_socket
 from socket import socket
 from google.cloud import language
 
+# The logger needs to be configured immediatly. 
 logging.basicConfig(filename='censor.log', filemode='w', format='%(asctime)s - %(message)s', datefmt='%d-%b-%y %H:%M:%S', level=logging.INFO)
 
 class CensorshipEngine(object):
     """
-        Censorship engine providing both in line (blocking) and off-line Deep packet inspection (DPI).
+        Censorship engine responsible for enforcing configurable censorship rules. 
     """
     def __init__(self, aRules):
+        """
+          :param aRules: List of the rules to follow.
+        """
         self.aRules = aRules
 
     def process(self, sClient, bBody):
         """
             Entry point for tasking the engine. 
+            :param sClient: Client we are performing censorship on. 
             :param bBody: Decrypted/decoded content body of an http response. 
         """
-        # Just print out the content body for now to show the ssl-interception is working. 
         if bBody:
+            # For each rule check if the content body of the page matches any of 
+            # the censorship conditions. If it does then perform the actions for
+            # that set of censorship conditions.
             for oRule in self.aRules:
                 if oRule.matches(bBody):
                     sResult = oRule.performActions({'sClient' : sClient, 'bBody': bBody})
+                    # If the action modifies the pages content body return it.
                     if sResult:
                         return sResult
 class CA(object):
@@ -60,31 +73,53 @@ class CA(object):
         return "openssl x509 -req -in {0} -CA {1} -CAkey {2} -CAcreateserial".format(sServerCrs, self.sCrtPath, self.sKeyPath) 
 
 class ACTION_TYPES(object):
-    LOG = 'Log'
-    BLOCK = 'Block'
-    EDIT = 'Edit'
+    """
+        Supported actions.
+    """
+    LOG = 'Log' # Log the offence to the censorship log file.
+    BLOCK = 'Block' # Block the web page from the user.
+    EDIT = 'Edit' # Edit the contents of the page.
 
 class CONDITION_TYPES(object):
-    REGEX = 'Regex'
-    CLASSIFY = 'Classify'
+    REGEX = 'Regex' # Regex match
+    CLASSIFY = 'Classify' # NL document classification type match.
 
 class Action(ABC):
+    """
+        Action base class.
+    """
     @abstractmethod
     def perform(**kwargs):
         pass
 
 class LogAction(Action):
-
+    """
+        Class that handles logging censorship violations.
+    """
     def __init__(self, oSettings, aRequiredArgs):
+        """
+            :param oSettings: Settings for the action from the config file.
+            :param aRequiredArgs: The arguments required to run the perform method.
+        """
         self.aRequiredArgs = aRequiredArgs
 
     def perform(self, sClient):
+        """
+            :param sClient: IP address of the client we are monitoring.
+        """
         logging.info("Client: {0} as violated censorship rules.".format(str(sClient)))
 
 class BlockAction(Action):
-
+    """
+        Class that handles blocking web pages that violate censorship conditions.
+    """
     def __init__(self, oSettings, aRequiredArgs):
+        """
+            :param oSettings: Settings for the action from the config file.
+            :param aRequiredArgs: The arguments required to run the perform method.
+        """
         self.aRequiredArgs = aRequiredArgs
+        # Define the block page.
         self.sBlockPage = """
             <!DOCTYPE html>
             <html>
@@ -95,48 +130,89 @@ class BlockAction(Action):
         """.format(oSettings.get('BlockMessage'))
 
     def perform(self):
+        """
+            :return: The block page.
+        """
         return self.sBlockPage
 
 class EditAction(Action):
-
+    """
+        Class that handles modifying the content body of web pages before returning them.
+    """
     def __init__(self, oSettings, aRequiredArgs):
+        """
+            :param oSettings: Settings for the action from the config file.
+            :param aRequiredArgs: The arguments required to run the perform method.
+        """
         self.aRequiredArgs = aRequiredArgs
+        # Precompile the regex statement from the config file.
         self.oRegex = re.compile(oSettings.get('Start'))
         self.sReplacement = oSettings.get('End')
 
     def perform(self, bBody):
+        """
+            :param bBody: The content body of the web page.
+            :return: Return the modifed content body of the web page.
+        """
         return self.oRegex.sub(self.sReplacement, bBody.decode('utf-8'))
 
 class Condition(ABC):
+    """
+        Abstract class for conditions.
+    """
     def matches(**kwargs):
         pass
 
 class RegexCondition(Condition):
-
+    """
+        Condition class checking performing regex searches in the content bodies of 
+        web pages.
+    """
     def __init__(self, oSettings):
+        """
+            :param oSettings: Settings for the condition from the config file.
+        """
+        # Precompile the regex expression.
         self.oRegex = re.compile(oSettings.get('Pattern'))
 
     def matches(self, bBody):
+        """
+            :param bBody: The content body of the web pages.
+            :return: True if the regex search matched on something, False otherwise.
+        """
         return self.oRegex.search(bBody.decode('utf-8'))
 
 class ClassifyCondition(Condition):
-
+    """
+        Condition class for checking if the content of a web pages violates
+        a blacklisted category defined by the users. (Categories must coincide with Google Clouds NL's
+        document classifications)
+    """
     def __init__(self, oSettings):
-        # Only import if the user is using this feature.
+        # To use this feature the user must specify their google application 
+        # credentials file.
         assert('GOOGLE_APPLICATION_CREDENTIALS' in os.environ)
+        # Only import if the user is using this feature.
         from google.cloud import language
+        # Instantiate the language client.
         self.oLanguageClient = language.LanguageServiceClient()
         self.aCategories = oSettings.get('Categories')
 
     def matches(self, bBody):
-        # For performance only check the between the title tags.
-        # If there is no title return.
+        # Use the heuristic mentioned in some of the research papers reviews
+        # on HTML document classification. The classification technique is using 
+        # the contents between the title tags which usually coincides with the 
+        # actual content of the page. Additionally, this drastically increases 
+        # the performance compared to trying to classify the document using 
+        # the entire content of the document. The only caveat is the accuracy
+        # of the classification is lowered. This tradeoff is worth it however.
         try:
             sTitle = bBody.decode('utf-8').split('<title>')[1].split('</title>')[0]
         except Exception as e:
-            try:
+            try: # The tag may be in upper case.
                 sTitle = bBody.decode('utf-8').split('<TITLE>')[1].split('</TITLE>')[0]
             except Exception as e:
+                # If the page doesn't follow the HTML standard just return.
                 return
         # Ensure there is at least 20 words. (Required for classifcation).
         aTmp = sTitle.split()
@@ -145,21 +221,45 @@ class ClassifyCondition(Condition):
             return
         elif iNWords < 20:
             sTitle = ' '.join(sWord for sWord in aTmp * (math.ceil((20 - iNWords) / iNWords) + 1))
-        # Perform the classification.
+        # Perform the classification using one of Googles pre-trained classification models.
+        # The classification is done remotlely in a distributed fashon on Google clouds servers 
+        # which either have top of the line GPU's or Googles custom designed TPU's (Tensor Processor Units). 
+        # Offloading the work enables almost real time classification which would be difficult to do 
+        # locally without lots of computing power.
         oDocument = language.types.Document(content=sTitle,type=language.enums.Document.Type.PLAIN_TEXT)
         oResponse = self.oLanguageClient.classify_text(oDocument)
+        # Check what categories the document was classfied into if any.
         aFoundCategories = [oCategory.name for oCategory in oResponse.categories]
+        # Check if the found category matches any of our black listed ones.
         return any(sCategory in aFoundCategories for sCategory in self.aCategories)
 
 class Rule(object):
+    """
+        A rule mapping of a set of conditions to a
+        set of actions. When one condition in the condition
+        set is matched all actions in the action set are performed.
+    """
     def __init__(self, aConditions, aActions):
+        """
+            :param aConditions: List of conditions.
+            :param aActions: List of actions.
+        """
         self.aConditions = aConditions
         self.aActions = aActions
 
     def matches(self, bBody):
+        """
+            :param bBody: The content body of the html page.
+            :return: True if any of the conditions in the condition set match.
+        """
         return any(oCondition.matches(bBody) for oCondition in self.aConditions)
 
     def performActions(self, oArgPool):
+        """
+            :param oArgPool: Pool of arguments the specific argument classes can pull from.
+            :return: Modifed content body of the html page. (If there is one).
+        """
+        # Iterate over each action and pass the request arguments to it.
         for oAction in self.aActions:
             sResult = oAction.perform(*(oArgPool.get(sArg) for sArg in oAction.aRequiredArgs))
             # For actions that modify the content body.
@@ -167,8 +267,18 @@ class Rule(object):
                 return sResult
 
 class Parser(object):
+    """
+        Class for parsing the censorship config file.
+    """
     @staticmethod
     def parseCensorshipConf(sPath):
+        """
+            Note: To make things easier I'm assuming the user will
+            provide a valid config file.
+        
+            :param sPath: Path to the censorship config file
+            :return: A list of censorship rules.
+        """
         try:
             with open('censorConf.json', 'rb') as oJson:
                 oJsonCont = json.loads(oJson.read())
@@ -178,13 +288,19 @@ class Parser(object):
 
     @staticmethod
     def ruleFactory(oJsonRule):
+        """
+            :param oJsonRule: A JSON object containing the settings for a singular rule.
+            :return: The Rule instance.
+        """
         aConditions = []
         aActions = []
+        # Create the conditions for the rule.
         for sCond, oSettings in oJsonRule.get('Conditions').items():
             if sCond == CONDITION_TYPES.REGEX:
                 aConditions.append(RegexCondition(oSettings))
             if sCond == CONDITION_TYPES.CLASSIFY:
                 aConditions.append(ClassifyCondition(oSettings))
+        # Create the actions for the rule.
         for sAction, oSettings in oJsonRule.get('Actions').items():
             if sAction == ACTION_TYPES.LOG:
                 aActions.append(LogAction(oSettings, ['sClient']))
@@ -208,7 +324,6 @@ class AuthenticationManager(object):
         """
         self.oCA = oCA
         self.sAuthStorePath = sAuthStorePath
-        # TODO: Should cache remain between runs?
         self.sCertCache = os.path.join(os.getcwd(), 'certCache')
         if not os.path.exists(self.sCertCache):
             os.mkdir(self.sCertCache)
@@ -231,8 +346,8 @@ class AuthenticationManager(object):
         # Firefox (I'm not sure about other browsers), requires the key and certificate to be in the same file
         # so concatenate (cat) them together. 
         sCmd = "{{ cat {0}; {1} && {2}; }} > {3}".format(self.sServPKey, sCsrGenCmd, sCASignCmd, sCert)
-        os.system(sCmd) # TODO make this blocking for some reason the subprocess module is losing paths. 
-        time.sleep(5) # Temporary until prior is blocking..
+        os.system(sCmd) # Using os.system because for some reason the subprocess module is losing paths.
+        time.sleep(5) # Simulate blocking for previous command, ideally would be better to explicitly block.
 
     def getCert(self, sHost):
         """
@@ -251,9 +366,15 @@ class AuthenticationManager(object):
 
 
 class CONTENT_ENCODINGS(object):
+    """
+        Supported html body content encodings.
+    """
     GZIP = 'gzip' # The content bodies containing html are usually compressed with gzip.
 
 class CONTENT_TYPES(object):
+    """
+        Supported document types.
+    """
     HTML = 'text/html'
 
 class Relay(ABC):
@@ -407,10 +528,11 @@ class ProxyMessageHandler(BaseHTTPRequestHandler):
         """
             Handle proxy errors. 
         """
-       # try:
-        yield # Run the body of the context.
-       # except Exception as e:  # TODO Add custom exceptions.
-       #     self.send_error(418, str(e)) # :)
+        try:
+            yield # Run the body of the context.
+        except Exception as e:  
+            # If something goes wrong display the error on the browser (not something to do in production).
+            self.send_error(418, str(e)) 
             
 
     def establishServerRelayConnection(self):
@@ -505,7 +627,6 @@ class ProxyServer(ThreadingMixIn, HTTPServer):
 
 
 if __name__ == '__main__':
-    # TODO: Add rest of command line arguments. 
     oParser = argparse.ArgumentParser(description="Proxy server with build in censorship engine.")
     oParser.add_argument('-a', '--authstore', help='Path to the auth store (the auth folder)', required=True)
     oParser.add_argument('-c', '--censorconf', help='Path to the censorship config file', required=True)
@@ -518,7 +639,6 @@ if __name__ == '__main__':
     if not os.path.exists(sCensorConfPath):
         print("{0} does not exist.".format(sCensorConfPath))
         sys.exit(-1)
-    # TODO: Figure out how to cleanly make the censorship engine and auth manager available to the ProxyMessageHandler.
     oCensorshipEngine = CensorshipEngine(Parser.parseCensorshipConf(sCensorConfPath))
     oProxyServer = ProxyServer()
     oCA = CA(sKeyPath=os.path.join(sAuthStore, 'fakeCA.key'), sCrtPath=os.path.join(sAuthStore,'fakeCA.crt'))
