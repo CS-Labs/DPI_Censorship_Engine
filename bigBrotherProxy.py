@@ -280,7 +280,7 @@ class Parser(object):
             :return: A list of censorship rules.
         """
         try:
-            with open('censorConf.json', 'rb') as oJson:
+            with open(sPath, 'rb') as oJson:
                 oJsonCont = json.loads(oJson.read())
             return list(map(Parser.ruleFactory, oJsonCont.get('Settings')))
         except Exception as e:
@@ -632,7 +632,7 @@ if __name__ == '__main__':
     oParser.add_argument('-c', '--censorconf', help='Path to the censorship config file', required=True)
     oArgs = vars(oParser.parse_args())
     sAuthStore = oArgs.get('authstore')
-    sCensorConfPath = oArgs.get('authstore')
+    sCensorConfPath = oArgs.get('censorconf')
     if not os.path.exists(sAuthStore):
         print("{0} does not exist.".format(sAuthStore))
         sys.exit(-1)
