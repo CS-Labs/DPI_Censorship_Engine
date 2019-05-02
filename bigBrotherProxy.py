@@ -169,12 +169,12 @@ class Rule(object):
 class Parser(object):
     @staticmethod
     def parseCensorshipConf(sPath):
-        # try:
-        with open('censorConf.json', 'rb') as oJson:
-            oJsonCont = json.loads(oJson.read())
-        return list(map(Parser.ruleFactory, oJsonCont.get('Settings')))
-        # except Exception as e:
-        #     raise Exception("Unable to parse config file. {0}".format(str(e)))
+        try:
+            with open('censorConf.json', 'rb') as oJson:
+                oJsonCont = json.loads(oJson.read())
+            return list(map(Parser.ruleFactory, oJsonCont.get('Settings')))
+        except Exception as e:
+            raise Exception("Unable to parse config file. {0}".format(str(e)))
 
     @staticmethod
     def ruleFactory(oJsonRule):
@@ -481,6 +481,9 @@ class ProxyMessageHandler(BaseHTTPRequestHandler):
         else:
             self.request.sendall(bytes(oHttpResponseWrapper))
 
+    # So the HTTPServer won't spam stdout with log messages.
+    def log_message(self, format, *args):
+        return
 
     # Forward all other messages to the message processor, note these are parent methods we
     # are overriding. 
